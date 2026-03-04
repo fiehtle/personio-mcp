@@ -57,6 +57,46 @@ ROUTE_EXCLUDES = [
         mcp_type=MCPType.EXCLUDE,
     ),
     RouteMap(methods=["GET"], pattern=r"^/v2/compensations$", mcp_type=MCPType.EXCLUDE),
+    RouteMap(
+        methods=["GET"],
+        pattern=r"^/v2/attendance-periods/\{id\}$",
+        mcp_type=MCPType.EXCLUDE,
+    ),
+    RouteMap(
+        methods=["GET"],
+        pattern=r"^/v2/legal-entities/\{id\}$",
+        mcp_type=MCPType.EXCLUDE,
+    ),
+    RouteMap(
+        methods=["GET"],
+        pattern=r"^/v2/org-units/\{id\}$",
+        mcp_type=MCPType.EXCLUDE,
+    ),
+    RouteMap(
+        methods=["GET"],
+        pattern=r"^/v2/persons/\{person_id\}/employments/\{id\}$",
+        mcp_type=MCPType.EXCLUDE,
+    ),
+    RouteMap(
+        methods=["GET"],
+        pattern=r"^/v2/reports/\{id\}$",
+        mcp_type=MCPType.EXCLUDE,
+    ),
+    RouteMap(
+        methods=["GET"],
+        pattern=r"^/v2/webhooks/\{id\}$",
+        mcp_type=MCPType.EXCLUDE,
+    ),
+    RouteMap(
+        methods=["GET"],
+        pattern=r"^/v2/webhooks/\{id\}/activity$",
+        mcp_type=MCPType.EXCLUDE,
+    ),
+    RouteMap(
+        methods=["GET"],
+        pattern=r"^/v2/webhooks/\{id\}/events$",
+        mcp_type=MCPType.EXCLUDE,
+    ),
 ]
 
 
@@ -320,6 +360,14 @@ def build_server() -> FastMCP:
         "list_reports",
         "list_report_attributes",
         "list_compensations",
+        "get_attendance_period",
+        "get_legal_entity",
+        "get_org_unit",
+        "get_person_employment",
+        "get_report",
+        "get_webhook",
+        "list_webhook_activity",
+        "list_webhook_events",
     ]:
         try:
             mcp.remove_tool(generated_name)
@@ -391,6 +439,466 @@ def build_server() -> FastMCP:
     def personio_auth_clear_cache() -> dict[str, Any]:
         token_manager.clear_cache()
         return {"cache_cleared": True}
+
+    def _error_details(response: httpx.Response) -> dict[str, Any]:
+        details: dict[str, Any] = {"status_code": response.status_code}
+        try:
+            details["body"] = response.json()
+        except Exception:
+            details["body"] = response.text
+        return details
+
+    def _extract_items(payload: Any) -> list[dict[str, Any]]:
+        if isinstance(payload, dict):
+            data = payload.get("_data")
+            if isinstance(data, list):
+                return [item for item in data if isinstance(item, dict)]
+        return []
+
+    def _extract_single(payload: Any) -> Any:
+        if isinstance(payload, dict) and "_data" in payload:
+            return payload["_data"]
+        return payload
+
+    def _first_id_from_payload(payload: Any) -> str | None:
+        for item in _extract_items(payload):
+            if item.get("id") is not None:
+                return str(item["id"])
+        return None
+
+    async def _resolve_first_resource_id(
+        path: str, params: dict[str, Any] | None = None
+    ) -> str | None:
+        response = await client.get(path, params=params)
+        response.raise_for_status()
+        return _first_id_from_payload(response.json())
+
+    async def _resolve_first_person_id() -> str | None:
+        return await _resolve_first_resource_id("/v2/persons", {"limit": 1})
+
+    async def _resolve_first_employment_id(person_id: str) -> str | None:
+        return await _resolve_first_resource_id(
+            f"/v2/persons/{person_id}/employments", {"limit": 1}
+        )
+
+    def _org_unit_from_employment(
+        employment: dict[str, Any],
+    ) -> tuple[str | None, str | None]:
+        for unit_type, field in (("department", "department"), ("team", "team")):
+            value = employment.get(field)
+            if isinstance(value, dict) and value.get("id") is not None:
+                return str(value["id"]), unit_type
+        for unit_type, field in (
+            ("department", "department_id"),
+            ("team", "team_id"),
+            ("department", "department.id"),
+            ("team", "team.id"),
+        ):
+            value = employment.get(field)
+            if value is not None:
+                return str(value), unit_type
+        return None, None
+
+    async def _resolve_org_unit_from_person(
+        person_id: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        resolved_person_id = person_id or await _resolve_first_person_id()
+        if not resolved_person_id:
+            return None, None
+
+        response = await client.get(
+            f"/v2/persons/{resolved_person_id}/employments", params={"limit": 1}
+        )
+        if response.status_code == 404:
+            return None, None
+        response.raise_for_status()
+
+        items = _extract_items(response.json())
+        if not items:
+            return None, None
+        return _org_unit_from_employment(items[0])
+
+    async def _resolve_first_webhook_id() -> str | None:
+        return await _resolve_first_resource_id("/v2/webhooks", {"limit": 1})
+
+    @mcp.tool(
+        name="get_attendance_period",
+        description=(
+            "Get an attendance period by ID. If no ID is provided, resolves the first "
+            "matching period (optionally filtered by person_id)."
+        ),
+    )
+    async def get_attendance_period(
+        id: str | None = None, person_id: str | None = None
+    ) -> dict[str, Any]:
+        resolved_id = id
+        if not resolved_id:
+            params: dict[str, Any] = {"limit": 1}
+            if person_id:
+                params["person.id"] = person_id
+            resolved_id = await _resolve_first_resource_id("/v2/attendance-periods", params)
+            if not resolved_id:
+                return {
+                    "found": False,
+                    "id": None,
+                    "attendance_period": None,
+                    "message": "No attendance periods found for the provided filters.",
+                }
+
+        response = await client.get(f"/v2/attendance-periods/{resolved_id}")
+        if response.status_code in {400, 404}:
+            return {
+                "found": False,
+                "id": resolved_id,
+                "attendance_period": None,
+                "error": _error_details(response),
+            }
+        response.raise_for_status()
+        return {
+            "found": True,
+            "id": resolved_id,
+            "attendance_period": _extract_single(response.json()),
+        }
+
+    @mcp.tool(
+        name="get_legal_entity",
+        description=(
+            "Get a legal entity by ID. If no ID is provided, resolves the first legal entity."
+        ),
+    )
+    async def get_legal_entity(id: str | None = None) -> dict[str, Any]:
+        resolved_id = id or await _resolve_first_resource_id("/v2/legal-entities", {"limit": 1})
+        if not resolved_id:
+            return {
+                "found": False,
+                "id": None,
+                "legal_entity": None,
+                "message": "No legal entities found.",
+            }
+
+        response = await client.get(f"/v2/legal-entities/{resolved_id}")
+        if response.status_code == 404:
+            return {
+                "found": False,
+                "id": resolved_id,
+                "legal_entity": None,
+                "error": _error_details(response),
+            }
+        response.raise_for_status()
+        return {
+            "found": True,
+            "id": resolved_id,
+            "legal_entity": _extract_single(response.json()),
+        }
+
+    @mcp.tool(
+        name="get_org_unit",
+        description=(
+            "Get an org unit by ID and type (team/department). If no ID is provided, "
+            "tries to infer one from the first available employment."
+        ),
+    )
+    async def get_org_unit(
+        id: str | None = None,
+        type: str | None = None,
+        include_parent_chain: bool = False,
+        person_id: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_id = str(id) if id else None
+        inferred_type: str | None = None
+        if not resolved_id:
+            resolved_id, inferred_type = await _resolve_org_unit_from_person(person_id=person_id)
+            if not resolved_id:
+                return {
+                    "found": False,
+                    "id": None,
+                    "org_unit": None,
+                    "message": (
+                        "No org unit ID could be inferred. Provide an org unit ID and type "
+                        "(team or department)."
+                    ),
+                }
+
+        requested_type = (type or "").strip().lower()
+        if requested_type in {"team", "department"}:
+            candidate_types = [requested_type]
+        elif inferred_type in {"team", "department"}:
+            candidate_types = [inferred_type] + [
+                item for item in ("department", "team") if item != inferred_type
+            ]
+        else:
+            candidate_types = ["department", "team"]
+
+        errors: list[dict[str, Any]] = []
+        for unit_type in candidate_types:
+            params: dict[str, Any] = {"type": unit_type}
+            if include_parent_chain:
+                params["include_parent_chain"] = "true"
+
+            response = await client.get(f"/v2/org-units/{resolved_id}", params=params)
+            if response.status_code == 200:
+                return {
+                    "found": True,
+                    "id": resolved_id,
+                    "type": unit_type,
+                    "org_unit": _extract_single(response.json()),
+                }
+            if response.status_code in {400, 404}:
+                errors.append({"type": unit_type, **_error_details(response)})
+                continue
+            if response.status_code == 412:
+                return {
+                    "found": False,
+                    "id": resolved_id,
+                    "type": unit_type,
+                    "org_unit": None,
+                    "error": _error_details(response),
+                }
+            response.raise_for_status()
+
+        return {
+            "found": False,
+            "id": resolved_id,
+            "type": requested_type or inferred_type,
+            "org_unit": None,
+            "tried_types": candidate_types,
+            "errors": errors,
+        }
+
+    @mcp.tool(
+        name="get_person_employment",
+        description=(
+            "Get an employment by person_id and employment id. If either is missing, "
+            "the tool resolves the first available value."
+        ),
+    )
+    async def get_person_employment(
+        person_id: str | None = None,
+        id: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_person_id = person_id or await _resolve_first_person_id()
+        if not resolved_person_id:
+            return {
+                "found": False,
+                "person_id": None,
+                "id": None,
+                "employment": None,
+                "message": "No persons found in this account.",
+            }
+
+        resolved_id = id or await _resolve_first_employment_id(resolved_person_id)
+        if not resolved_id:
+            return {
+                "found": False,
+                "person_id": resolved_person_id,
+                "id": None,
+                "employment": None,
+                "message": "No employments found for the selected person.",
+            }
+
+        response = await client.get(
+            f"/v2/persons/{resolved_person_id}/employments/{resolved_id}"
+        )
+        if response.status_code == 404:
+            return {
+                "found": False,
+                "person_id": resolved_person_id,
+                "id": resolved_id,
+                "employment": None,
+                "error": _error_details(response),
+            }
+        response.raise_for_status()
+        return {
+            "found": True,
+            "person_id": resolved_person_id,
+            "id": resolved_id,
+            "employment": _extract_single(response.json()),
+        }
+
+    @mcp.tool(
+        name="get_report",
+        description=(
+            "Get a report by ID. If no ID is provided, resolves the first report."
+        ),
+    )
+    async def get_report(
+        id: str | None = None,
+        locale: str | None = None,
+        cursor: str | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        resolved_id = id or await _resolve_first_resource_id("/v2/reports", {"limit": 1})
+        if not resolved_id:
+            return {
+                "found": False,
+                "id": None,
+                "report": None,
+                "message": "No reports found.",
+            }
+
+        params: dict[str, Any] = {}
+        if locale:
+            params["locale"] = locale
+        if cursor:
+            params["cursor"] = cursor
+        if limit is not None:
+            params["limit"] = limit
+
+        response = await client.get(f"/v2/reports/{resolved_id}", params=params)
+        if response.status_code in {400, 404}:
+            return {
+                "found": False,
+                "id": resolved_id,
+                "report": None,
+                "error": _error_details(response),
+            }
+        response.raise_for_status()
+        return {"found": True, "id": resolved_id, "report": _extract_single(response.json())}
+
+    @mcp.tool(
+        name="get_webhook",
+        description=(
+            "Get a webhook by ID. If no ID is provided, resolves the first webhook."
+        ),
+    )
+    async def get_webhook(id: str | None = None) -> dict[str, Any]:
+        resolved_id = id or await _resolve_first_webhook_id()
+        if not resolved_id:
+            return {
+                "found": False,
+                "id": None,
+                "webhook": None,
+                "message": "No webhooks are currently configured.",
+            }
+
+        response = await client.get(f"/v2/webhooks/{resolved_id}")
+        if response.status_code in {403, 404}:
+            return {
+                "found": False,
+                "id": resolved_id,
+                "webhook": None,
+                "error": _error_details(response),
+            }
+        response.raise_for_status()
+        return {"found": True, "id": resolved_id, "webhook": _extract_single(response.json())}
+
+    @mcp.tool(
+        name="list_webhook_activity",
+        description=(
+            "List delivery activity for a webhook. If no webhook ID is provided, "
+            "uses the first available webhook."
+        ),
+    )
+    async def list_webhook_activity(
+        id: str | None = None,
+        completed_at_gte: str | None = None,
+        completed_at_lte: str | None = None,
+        event_name: str | None = None,
+        is_delivered: bool | None = None,
+        redelivery_id: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_id = id or await _resolve_first_webhook_id()
+        if not resolved_id:
+            return {
+                "found": False,
+                "webhook_id": None,
+                "count": 0,
+                "activities": [],
+                "message": "No webhooks are currently configured.",
+            }
+
+        params: dict[str, Any] = {"limit": max(1, min(limit, 200))}
+        if completed_at_gte:
+            params["completed_at.gte"] = completed_at_gte
+        if completed_at_lte:
+            params["completed_at.lte"] = completed_at_lte
+        if event_name:
+            params["event_name"] = event_name
+        if is_delivered is not None:
+            params["is_delivered"] = is_delivered
+        if redelivery_id:
+            params["redelivery_id"] = redelivery_id
+        if cursor:
+            params["cursor"] = cursor
+
+        response = await client.get(f"/v2/webhooks/{resolved_id}/activity", params=params)
+        if response.status_code in {403, 404, 422}:
+            return {
+                "found": False,
+                "webhook_id": resolved_id,
+                "count": 0,
+                "activities": [],
+                "error": _error_details(response),
+            }
+        response.raise_for_status()
+
+        payload = response.json()
+        items = _extract_items(payload)
+        return {
+            "found": True,
+            "webhook_id": resolved_id,
+            "count": len(items),
+            "activities": items,
+            "meta": payload.get("_meta", {}) if isinstance(payload, dict) else {},
+        }
+
+    @mcp.tool(
+        name="list_webhook_events",
+        description=(
+            "List events for a webhook. If no webhook ID is provided, "
+            "uses the first available webhook."
+        ),
+    )
+    async def list_webhook_events(
+        id: str | None = None,
+        occurred_at_gte: str | None = None,
+        occurred_at_lte: str | None = None,
+        event_name: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_id = id or await _resolve_first_webhook_id()
+        if not resolved_id:
+            return {
+                "found": False,
+                "webhook_id": None,
+                "count": 0,
+                "events": [],
+                "message": "No webhooks are currently configured.",
+            }
+
+        params: dict[str, Any] = {"limit": max(1, min(limit, 200))}
+        if occurred_at_gte:
+            params["occurred_at.gte"] = occurred_at_gte
+        if occurred_at_lte:
+            params["occurred_at.lte"] = occurred_at_lte
+        if event_name:
+            params["event_name"] = event_name
+        if cursor:
+            params["cursor"] = cursor
+
+        response = await client.get(f"/v2/webhooks/{resolved_id}/events", params=params)
+        if response.status_code in {403, 404, 422}:
+            return {
+                "found": False,
+                "webhook_id": resolved_id,
+                "count": 0,
+                "events": [],
+                "error": _error_details(response),
+            }
+        response.raise_for_status()
+
+        payload = response.json()
+        items = _extract_items(payload)
+        return {
+            "found": True,
+            "webhook_id": resolved_id,
+            "count": len(items),
+            "events": items,
+            "meta": payload.get("_meta", {}) if isinstance(payload, dict) else {},
+        }
 
     @mcp.tool(
         name="list_persons",
