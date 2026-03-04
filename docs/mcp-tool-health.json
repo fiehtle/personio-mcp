@@ -1,0 +1,15 @@
+{
+  "fixtures": {
+    "person_id": "35780902",
+    "project_id": "2318375",
+    "absence_type_id": "ef02a5fa-8bf0-43d9-9b93-6ddd496e42b9",
+    "absence_period_id": "2924f90a-8e5f-46b7-bf46-18e748ab7129"
+  },
+  "counts": {
+    "total_tools": 59,
+    "read_like_tested": 31,
+    "ok": 31,
+    "failed": 0
+  },
+  "failed": []
+}
