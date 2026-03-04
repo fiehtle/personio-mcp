@@ -13,7 +13,9 @@ This project turns Personio v2 API endpoints into one hosted MCP server using Fa
 ## Project structure
 
 - `scripts/sync_personio_openapi.py`: fetches and merges Personio OpenAPI specs.
+- `scripts/generate_tool_catalog.py`: generates endpoint-to-tool markdown catalog.
 - `src/server.py`: FastMCP server + Personio auth integration.
+- `src/tool_naming.py`: semantic operation-to-tool naming map used by FastMCP.
 - `render.yaml`: Render web service definition.
 
 ## Local run
@@ -23,6 +25,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python scripts/sync_personio_openapi.py --output specs/personio-v2-openapi.json
+python scripts/generate_tool_catalog.py --spec specs/personio-v2-openapi.json --output docs/personio-tool-catalog.md
 
 export PERSONIO_CLIENT_ID="your-client-id"
 export PERSONIO_CLIENT_SECRET="your-client-secret"
@@ -68,4 +71,4 @@ Your public MCP endpoint will be:
 
 - Auth paths (`/v2/auth/token`, `/v2/auth/revoke`) are implemented as manual MCP tools because OpenAPI auto-tools in FastMCP currently send JSON request bodies, while Personio auth endpoints require `application/x-www-form-urlencoded`.
 - The merged spec is generated at build time by `render.yaml` and can be refreshed any time with the sync script.
-
+- Tool names are rewritten to semantic names (for example `list_persons`, `get_person`, `list_webhooks`) via `mcp_names` for better AI-assistant tool selection.

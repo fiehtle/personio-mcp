@@ -12,6 +12,11 @@ from typing import Any
 import httpx
 from fastmcp import FastMCP
 
+try:
+    from tool_naming import build_mcp_names
+except ModuleNotFoundError:
+    from src.tool_naming import build_mcp_names
+
 AUTH_PATHS = {"/v2/auth/token", "/v2/auth/revoke"}
 HTTP_METHODS = ("get", "post", "put", "patch", "delete", "options", "head", "trace")
 
@@ -221,6 +226,7 @@ def build_server() -> FastMCP:
 
     full_spec = load_spec(spec_path)
     runtime_spec = filter_auth_paths(full_spec)
+    mcp_names = build_mcp_names(runtime_spec)
 
     token_manager = PersonioTokenManager(
         base_url=base_url,
@@ -250,6 +256,7 @@ def build_server() -> FastMCP:
         openapi_spec=runtime_spec,
         client=client,
         name="Personio MCP Server",
+        mcp_names=mcp_names,
     )
 
     @mcp.tool(
@@ -264,7 +271,7 @@ def build_server() -> FastMCP:
             "spec_path": str(spec_path),
             "paths": len(full_spec.get("paths", {})),
             "operations_total": count_operations(full_spec),
-            "operations_exposed_as_tools": count_operations(runtime_spec) + 3,
+            "operations_exposed_as_tools": count_operations(runtime_spec) + 6,
             "auth_paths_implemented_manually": sorted(AUTH_PATHS),
         }
 
