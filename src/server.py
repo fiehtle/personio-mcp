@@ -11,6 +11,7 @@ from typing import Any
 
 import httpx
 from fastmcp import FastMCP
+from fastmcp.server.openapi import MCPType, RouteMap
 
 try:
     from tool_naming import build_mcp_names
@@ -35,6 +36,28 @@ DEFAULT_DISABLED_TOOLS = {
     "list_workplaces",
     "list_cost_centers",
 }
+
+# Exclude unstable/unsupported endpoints at OpenAPI-import time so they never
+# appear as MCP tools.
+ROUTE_EXCLUDES = [
+    RouteMap(methods=["GET"], pattern=r"^/v2/recruiting/.*", mcp_type=MCPType.EXCLUDE),
+    RouteMap(methods=["GET"], pattern=r"^/v2/workplaces$", mcp_type=MCPType.EXCLUDE),
+    RouteMap(methods=["GET"], pattern=r"^/v2/cost-centers$", mcp_type=MCPType.EXCLUDE),
+    RouteMap(methods=["GET"], pattern=r"^/v2/persons$", mcp_type=MCPType.EXCLUDE),
+    RouteMap(
+        methods=["GET"],
+        pattern=r"^/v2/persons/\{person_id\}/employments$",
+        mcp_type=MCPType.EXCLUDE,
+    ),
+    RouteMap(methods=["GET"], pattern=r"^/v2/legal-entities$", mcp_type=MCPType.EXCLUDE),
+    RouteMap(methods=["GET"], pattern=r"^/v2/reports$", mcp_type=MCPType.EXCLUDE),
+    RouteMap(
+        methods=["GET"],
+        pattern=r"^/v2/reports/attributes$",
+        mcp_type=MCPType.EXCLUDE,
+    ),
+    RouteMap(methods=["GET"], pattern=r"^/v2/compensations$", mcp_type=MCPType.EXCLUDE),
+]
 
 
 def get_env(name: str, default: str | None = None) -> str:
@@ -274,6 +297,7 @@ def build_server() -> FastMCP:
         client=client,
         name="Personio MCP Server",
         mcp_names=mcp_names,
+        route_maps=ROUTE_EXCLUDES,
     )
 
     disabled_tools = set(DEFAULT_DISABLED_TOOLS)
