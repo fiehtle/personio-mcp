@@ -317,6 +317,51 @@ def build_server() -> FastMCP:
         token_manager.clear_cache()
         return {"cache_cleared": True}
 
+    @mcp.tool(
+        description=(
+            "List employees (Personio Persons API) with a simplified schema for "
+            "MCP clients that are strict about complex OpenAPI-generated schemas."
+        )
+    )
+    async def list_employees(
+        limit: int = 10,
+        cursor: str | None = None,
+        email: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": max(1, min(limit, 50))}
+        if cursor:
+            params["cursor"] = cursor
+        if email:
+            params["email"] = email
+        if first_name:
+            params["first_name"] = first_name
+        if last_name:
+            params["last_name"] = last_name
+
+        response = await client.get("/v2/persons", params=params)
+        response.raise_for_status()
+        payload = response.json()
+        people = payload.get("_data", [])
+        meta = payload.get("_meta", {})
+
+        return {
+            "count": len(people),
+            "people": people,
+            "meta": meta,
+        }
+
+    @mcp.tool(
+        description=(
+            "Get a single employee (Personio Person) by ID using a simplified schema."
+        )
+    )
+    async def get_employee(person_id: str) -> dict[str, Any]:
+        response = await client.get(f"/v2/persons/{person_id}")
+        response.raise_for_status()
+        return response.json()
+
     return mcp
 
 
