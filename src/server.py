@@ -20,6 +20,22 @@ except ModuleNotFoundError:
 AUTH_PATHS = {"/v2/auth/token", "/v2/auth/revoke"}
 HTTP_METHODS = ("get", "post", "put", "patch", "delete", "options", "head", "trace")
 
+# Tools that are either unavailable for this tenant (404 from Personio) or
+# too unstable in generated schemas for assistant-facing use.
+DEFAULT_DISABLED_TOOLS = {
+    "list_recruiting_applications",
+    "get_recruiting_application",
+    "list_application_stage_transitions",
+    "list_recruiting_candidates",
+    "get_recruiting_candidate",
+    "list_recruiting_categories",
+    "get_recruiting_category",
+    "list_recruiting_jobs",
+    "get_recruiting_job",
+    "list_workplaces",
+    "list_cost_centers",
+}
+
 
 def get_env(name: str, default: str | None = None) -> str:
     value = os.environ.get(name, default)
@@ -223,6 +239,7 @@ def build_server() -> FastMCP:
     partner_id = os.environ.get("PERSONIO_PARTNER_ID")
     default_scope = os.environ.get("PERSONIO_DEFAULT_SCOPE")
     allow_token_exposure = get_bool_env("PERSONIO_ALLOW_TOKEN_EXPOSURE", False)
+    disabled_tools_csv = os.environ.get("PERSONIO_DISABLED_TOOLS", "")
 
     full_spec = load_spec(spec_path)
     runtime_spec = filter_auth_paths(full_spec)
@@ -259,6 +276,32 @@ def build_server() -> FastMCP:
         mcp_names=mcp_names,
     )
 
+    disabled_tools = set(DEFAULT_DISABLED_TOOLS)
+    if disabled_tools_csv.strip():
+        disabled_tools.update(
+            item.strip() for item in disabled_tools_csv.split(",") if item.strip()
+        )
+    for tool_name in sorted(disabled_tools):
+        try:
+            mcp.remove_tool(tool_name)
+        except Exception:
+            pass
+
+    # Replace generated tools that frequently fail schema validation with
+    # thin wrappers that return stable object shapes.
+    for generated_name in [
+        "list_persons",
+        "list_person_employments",
+        "list_legal_entities",
+        "list_reports",
+        "list_report_attributes",
+        "list_compensations",
+    ]:
+        try:
+            mcp.remove_tool(generated_name)
+        except Exception:
+            pass
+
     @mcp.tool(
         description=(
             "Return server metadata and endpoint coverage for this Personio MCP instance."
@@ -273,6 +316,7 @@ def build_server() -> FastMCP:
             "operations_total": count_operations(full_spec),
             "operations_exposed_as_tools": count_operations(runtime_spec) + 6,
             "auth_paths_implemented_manually": sorted(AUTH_PATHS),
+            "disabled_tools": sorted(disabled_tools),
         }
 
     @mcp.tool(
@@ -323,6 +367,144 @@ def build_server() -> FastMCP:
     def personio_auth_clear_cache() -> dict[str, Any]:
         token_manager.clear_cache()
         return {"cache_cleared": True}
+
+    @mcp.tool(
+        name="list_persons",
+        description="List persons with a stable output schema.",
+    )
+    async def list_persons_wrapper(
+        limit: int = 10,
+        cursor: str | None = None,
+        id: str | None = None,
+        email: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        preferred_name: str | None = None,
+        created_at: str | None = None,
+        updated_at: str | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": max(1, min(limit, 50))}
+        if cursor:
+            params["cursor"] = cursor
+        if id:
+            params["id"] = id
+        if email:
+            params["email"] = email
+        if first_name:
+            params["first_name"] = first_name
+        if last_name:
+            params["last_name"] = last_name
+        if preferred_name:
+            params["preferred_name"] = preferred_name
+        if created_at:
+            params["created_at"] = created_at
+        if updated_at:
+            params["updated_at"] = updated_at
+
+        response = await client.get("/v2/persons", params=params)
+        response.raise_for_status()
+        payload = response.json()
+        people = payload.get("_data", [])
+        return {"count": len(people), "people": people, "meta": payload.get("_meta", {})}
+
+    @mcp.tool(
+        name="list_person_employments",
+        description="List employments for a person with a stable output schema.",
+    )
+    async def list_person_employments_wrapper(
+        person_id: str,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": max(1, min(limit, 100))}
+        if cursor:
+            params["cursor"] = cursor
+
+        response = await client.get(f"/v2/persons/{person_id}/employments", params=params)
+        response.raise_for_status()
+        payload = response.json()
+        items = payload.get("_data", [])
+        return {"count": len(items), "employments": items, "meta": payload.get("_meta", {})}
+
+    @mcp.tool(
+        name="list_legal_entities",
+        description="List legal entities with a stable output schema.",
+    )
+    async def list_legal_entities_wrapper(
+        limit: int = 50,
+        cursor: str | None = None,
+        id: str | None = None,
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": max(1, min(limit, 100))}
+        if cursor:
+            params["cursor"] = cursor
+        if id:
+            params["id"] = id
+        if name:
+            params["name"] = name
+
+        response = await client.get("/v2/legal-entities", params=params)
+        response.raise_for_status()
+        payload = response.json()
+        items = payload.get("_data", [])
+        return {"count": len(items), "legal_entities": items, "meta": payload.get("_meta", {})}
+
+    @mcp.tool(
+        name="list_reports",
+        description="List reports with a stable output schema.",
+    )
+    async def list_reports_wrapper(limit: int = 50, cursor: str | None = None) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": max(1, min(limit, 100))}
+        if cursor:
+            params["cursor"] = cursor
+
+        response = await client.get("/v2/reports", params=params)
+        response.raise_for_status()
+        payload = response.json()
+        items = payload.get("_data", [])
+        return {"count": len(items), "reports": items, "meta": payload.get("_meta", {})}
+
+    @mcp.tool(
+        name="list_report_attributes",
+        description="List report attributes with a stable output schema.",
+    )
+    async def list_report_attributes_wrapper() -> dict[str, Any]:
+        response = await client.get("/v2/reports/attributes")
+        response.raise_for_status()
+        payload = response.json()
+        items = payload.get("_data", [])
+        return {"count": len(items), "attributes": items, "meta": payload.get("_meta", {})}
+
+    @mcp.tool(
+        name="list_compensations",
+        description="List compensations with a stable output schema.",
+    )
+    async def list_compensations_wrapper(
+        start_date: str | None = None,
+        end_date: str | None = None,
+        person_id: str | None = None,
+        legal_entity_id: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": max(1, min(limit, 100))}
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
+        if person_id:
+            params["person.id"] = person_id
+        if legal_entity_id:
+            params["legal_entity.id"] = legal_entity_id
+        if cursor:
+            params["cursor"] = cursor
+
+        response = await client.get("/v2/compensations", params=params)
+        response.raise_for_status()
+        payload = response.json()
+        items = payload.get("_data", [])
+        return {"count": len(items), "compensations": items, "meta": payload.get("_meta", {})}
 
     @mcp.tool(
         description=(

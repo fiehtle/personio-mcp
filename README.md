@@ -66,9 +66,12 @@ Your public MCP endpoint will be:
 - `PERSONIO_APP_ID` (default: `PERSONIO_MCP`)
 - `PERSONIO_PARTNER_ID` (optional but recommended by Personio)
 - `PERSONIO_ALLOW_TOKEN_EXPOSURE` (default: `false`)
+- `PERSONIO_DISABLED_TOOLS` (optional CSV of tool names to hide in addition to defaults)
 
 ## Notes
 
 - Auth paths (`/v2/auth/token`, `/v2/auth/revoke`) are implemented as manual MCP tools because OpenAPI auto-tools in FastMCP currently send JSON request bodies, while Personio auth endpoints require `application/x-www-form-urlencoded`.
 - The merged spec is generated at build time by `render.yaml` and can be refreshed any time with the sync script.
 - Tool names are rewritten to semantic names (for example `list_persons`, `get_person`, `list_webhooks`) via `mcp_names` for better AI-assistant tool selection.
+- A default disabled-tools set hides endpoints that are commonly unavailable in this tenant (for example recruiting/workplaces/cost-centers) to reduce assistant misfires.
+- Schema-sensitive endpoints (`list_persons`, `list_person_employments`, `list_legal_entities`, `list_reports`, `list_report_attributes`, `list_compensations`) are served through stable wrappers.
