@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: personio-mcp
+    runtime: python
+    plan: free
+    autoDeploy: false
+    buildCommand: pip install -r requirements.txt && python scripts/sync_personio_openapi.py --output specs/personio-v2-openapi.json
+    startCommand: python src/server.py
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: PERSONIO_CLIENT_ID
+        sync: false
+      - key: PERSONIO_CLIENT_SECRET
+        sync: false
+      - key: PERSONIO_APP_ID
+        value: PERSONIO_MCP
+      - key: PERSONIO_PARTNER_ID
+        value: ""
+      - key: PERSONIO_ALLOW_TOKEN_EXPOSURE
+        value: "false"
+
