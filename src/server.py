@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 import json
 import os
@@ -303,6 +304,9 @@ def build_server() -> FastMCP:
     default_scope = os.environ.get("PERSONIO_DEFAULT_SCOPE")
     allow_token_exposure = get_bool_env("PERSONIO_ALLOW_TOKEN_EXPOSURE", False)
     disabled_tools_csv = os.environ.get("PERSONIO_DISABLED_TOOLS", "")
+    recruiting_company_id = os.environ.get("PERSONIO_RECRUITING_COMPANY_ID")
+    recruiting_api_key = os.environ.get("PERSONIO_RECRUITING_API_KEY")
+    has_recruiting_auth = bool(recruiting_company_id and recruiting_api_key)
 
     full_spec = load_spec(spec_path)
     runtime_spec = filter_auth_paths(full_spec)
@@ -320,6 +324,19 @@ def build_server() -> FastMCP:
     )
 
     async def attach_personio_auth(request: httpx.Request) -> None:
+        if request.url.path.startswith("/v1/recruiting/"):
+            if not has_recruiting_auth:
+                raise RuntimeError(
+                    "Recruiting API credentials are not configured. Set "
+                    "PERSONIO_RECRUITING_COMPANY_ID and PERSONIO_RECRUITING_API_KEY."
+                )
+            request.headers["Authorization"] = f"Bearer {recruiting_api_key}"
+            request.headers["X-Company-Id"] = str(recruiting_company_id)
+            request.headers["X-Personio-App-ID"] = app_id
+            if partner_id:
+                request.headers["X-Personio-Partner-ID"] = partner_id
+            return
+
         token = await token_manager.get_access_token()
         request.headers["Authorization"] = f"Bearer {token}"
         request.headers["X-Personio-App-ID"] = app_id
@@ -389,6 +406,25 @@ def build_server() -> FastMCP:
             "operations_exposed_as_tools": count_operations(runtime_spec) + 6,
             "auth_paths_implemented_manually": sorted(AUTH_PATHS),
             "disabled_tools": sorted(disabled_tools),
+            "recruiting_auth_enabled": has_recruiting_auth,
+            "recruiting_company_id_configured": bool(recruiting_company_id),
+        }
+
+    @mcp.tool(
+        description=(
+            "Show whether dedicated Personio Recruiting API credentials are configured "
+            "for /v1/recruiting endpoints."
+        )
+    )
+    def personio_recruiting_auth_info() -> dict[str, Any]:
+        return {
+            "enabled": has_recruiting_auth,
+            "company_id": recruiting_company_id if recruiting_company_id else None,
+            "api_key_configured": bool(recruiting_api_key),
+            "required_env_vars": [
+                "PERSONIO_RECRUITING_COMPANY_ID",
+                "PERSONIO_RECRUITING_API_KEY",
+            ],
         }
 
     @mcp.tool(
@@ -447,6 +483,22 @@ def build_server() -> FastMCP:
         except Exception:
             details["body"] = response.text
         return details
+
+    def _require_recruiting_auth() -> tuple[str, str]:
+        if not has_recruiting_auth or not recruiting_company_id or not recruiting_api_key:
+            raise RuntimeError(
+                "Recruiting API credentials are not configured. Set "
+                "PERSONIO_RECRUITING_COMPANY_ID and PERSONIO_RECRUITING_API_KEY."
+            )
+        return recruiting_company_id, recruiting_api_key
+
+    def _json_or_text(response: httpx.Response) -> Any:
+        if not response.content:
+            return {}
+        try:
+            return response.json()
+        except Exception:
+            return response.text
 
     def _extract_items(payload: Any) -> list[dict[str, Any]]:
         if isinstance(payload, dict):
@@ -1082,6 +1134,87 @@ def build_server() -> FastMCP:
         response = await client.get(f"/v2/persons/{person_id}")
         response.raise_for_status()
         return response.json()
+
+    @mcp.tool(
+        description=(
+            "Create a recruiting application via Personio Recruiting API v1 "
+            "(/v1/recruiting/applications) using dedicated recruiting credentials."
+        )
+    )
+    async def recruiting_create_application(payload: dict[str, Any]) -> dict[str, Any]:
+        _require_recruiting_auth()
+
+        response = await client.post("/v1/recruiting/applications", json=payload)
+        if response.status_code >= 400:
+            return {
+                "ok": False,
+                "status_code": response.status_code,
+                "error": _json_or_text(response),
+            }
+
+        return {
+            "ok": True,
+            "status_code": response.status_code,
+            "result": _json_or_text(response),
+        }
+
+    @mcp.tool(
+        description=(
+            "Upload a recruiting document via Personio Recruiting API v1 "
+            "(/v1/recruiting/applications/documents). Returns document identifier "
+            "that can be attached to an application payload."
+        )
+    )
+    async def recruiting_upload_application_document(
+        filename: str,
+        content_base64: str,
+        content_type: str = "application/octet-stream",
+    ) -> dict[str, Any]:
+        _require_recruiting_auth()
+
+        try:
+            file_bytes = base64.b64decode(content_base64, validate=True)
+        except Exception as exc:
+            raise RuntimeError("content_base64 must be valid base64 data.") from exc
+
+        files = {"file": (filename, file_bytes, content_type)}
+        response = await client.post("/v1/recruiting/applications/documents", files=files)
+        if response.status_code >= 400:
+            return {
+                "ok": False,
+                "status_code": response.status_code,
+                "error": _json_or_text(response),
+            }
+
+        return {
+            "ok": True,
+            "status_code": response.status_code,
+            "result": _json_or_text(response),
+        }
+
+    @mcp.tool(
+        description=(
+            "Safe connectivity probe for Recruiting API credentials. Sends an invalid "
+            "payload to /v1/recruiting/applications and reports auth vs validation behavior."
+        )
+    )
+    async def recruiting_probe() -> dict[str, Any]:
+        _require_recruiting_auth()
+
+        response = await client.post("/v1/recruiting/applications", json={})
+        result = {
+            "status_code": response.status_code,
+            "response": _json_or_text(response),
+            "interpretation": (
+                "401/403 usually means credential or permission issue. "
+                "400/422 usually means auth succeeded but payload is invalid."
+            ),
+        }
+        if response.status_code < 400:
+            result["interpretation"] = (
+                "Request unexpectedly succeeded with empty payload; credentials are valid."
+            )
+        return result
 
     return mcp
 

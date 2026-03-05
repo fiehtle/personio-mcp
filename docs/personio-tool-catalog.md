@@ -9,6 +9,10 @@ This catalog maps each Personio endpoint to assistant-friendly MCP tool names.
 - `personio_mcp_info`: server coverage and diagnostics.
 - `personio_auth_token`: validate token issuance (masked by default).
 - `personio_auth_revoke`: revoke current token if needed.
+- `personio_recruiting_auth_info`: validate dedicated recruiting credential configuration.
+- `recruiting_probe`: safe recruiting auth/connectivity check.
+- `recruiting_create_application`: create recruiting applications via `/v1/recruiting/applications`.
+- `recruiting_upload_application_document`: upload recruiting documents via `/v1/recruiting/applications/documents`.
 
 ## Endpoint mappings
 

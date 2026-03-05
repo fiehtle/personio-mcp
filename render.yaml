@@ -19,4 +19,7 @@ services:
         value: ""
       - key: PERSONIO_ALLOW_TOKEN_EXPOSURE
         value: "false"
-
+      - key: PERSONIO_RECRUITING_COMPANY_ID
+        sync: false
+      - key: PERSONIO_RECRUITING_API_KEY
+        sync: false

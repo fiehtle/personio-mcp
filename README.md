@@ -8,6 +8,7 @@ This project turns Personio v2 API endpoints into one hosted MCP server using Fa
 - Merges them into a single OpenAPI file (`specs/personio-v2-openapi.json`).
 - Auto-generates MCP tools for all merged API operations via `FastMCP.from_openapi`.
 - Handles Personio OAuth token lifecycle using `PERSONIO_CLIENT_ID` and `PERSONIO_CLIENT_SECRET`.
+- Supports optional dedicated Recruiting API credentials for `/v1/recruiting/*` endpoints.
 - Exposes manual auth tools for token/revoke/cache control.
 
 ## Project structure
@@ -31,6 +32,8 @@ export PERSONIO_CLIENT_ID="your-client-id"
 export PERSONIO_CLIENT_SECRET="your-client-secret"
 export PERSONIO_APP_ID="PERSONIO_MCP"
 export PERSONIO_PARTNER_ID="YOUR_PARTNER"
+export PERSONIO_RECRUITING_COMPANY_ID="your-company-id"
+export PERSONIO_RECRUITING_API_KEY="your-recruiting-api-key"
 
 python src/server.py
 ```
@@ -67,6 +70,8 @@ Your public MCP endpoint will be:
 - `PERSONIO_PARTNER_ID` (optional but recommended by Personio)
 - `PERSONIO_ALLOW_TOKEN_EXPOSURE` (default: `false`)
 - `PERSONIO_DISABLED_TOOLS` (optional CSV of tool names to hide in addition to defaults)
+- `PERSONIO_RECRUITING_COMPANY_ID` (optional; required for recruiting v1 tools)
+- `PERSONIO_RECRUITING_API_KEY` (optional; required for recruiting v1 tools)
 
 ## Notes
 
@@ -75,3 +80,8 @@ Your public MCP endpoint will be:
 - Tool names are rewritten to semantic names (for example `list_persons`, `get_person`, `list_webhooks`) via `mcp_names` for better AI-assistant tool selection.
 - A default disabled-tools set hides endpoints that are commonly unavailable in this tenant (for example recruiting/workplaces/cost-centers) to reduce assistant misfires.
 - Schema-sensitive endpoints (`list_persons`, `list_person_employments`, `list_legal_entities`, `list_reports`, `list_report_attributes`, `list_compensations`) are served through stable wrappers.
+- Recruiting v1 operations are exposed as manual tools and authenticated via `PERSONIO_RECRUITING_COMPANY_ID` + `PERSONIO_RECRUITING_API_KEY`:
+  - `personio_recruiting_auth_info`
+  - `recruiting_probe`
+  - `recruiting_create_application`
+  - `recruiting_upload_application_document`
